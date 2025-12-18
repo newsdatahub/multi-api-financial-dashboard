@@ -23,7 +23,7 @@ A Streamlit dashboard demonstrating resilient patterns for integrating multiple 
 
 ## Demo
 
-![Dashboard Demo](demo.gif)
+![demo](https://github.com/user-attachments/assets/89b95629-65d0-4ae7-adcf-669512eb18e2)
 
 *Demo showing real-time stock data, news feed, and AI-generated insights*
 
