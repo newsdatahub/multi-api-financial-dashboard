@@ -4,65 +4,83 @@ A Streamlit dashboard demonstrating resilient patterns for integrating multiple 
 
 ![Streamlit](https://img.shields.io/badge/streamlit-v1.29+-brightgreen) ![Python](https://img.shields.io/badge/python-3.9+-blue) ![License](https://img.shields.io/badge/license-MIT-green)
 
+## Table of Contents
+
+- [Demo](#demo)
+- [Overview](#overview)
+- [Features](#features)
+- [Resilient Design Patterns](#resilient-design-patterns)
+- [Architecture](#architecture)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Running the Application](#running-the-application)
+- [Background Refresh Mode](#background-refresh-mode)
+- [Testing](#testing)
+- [Project Structure](#project-structure)
+- [Configuration](#configuration)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
+## Demo
+
+![Dashboard Demo](demo.gif)
+
+*Demo showing real-time stock data, news feed, and AI-generated insights*
+
 ## Overview
 
-This financial dashboard aggregates real-time stock data, news articles, and AI-generated insights for Netflix (NFLX), Alphabet (GOOGL), and Tesla (TSLA). You'll build a working dashboard and learn how to prevent unpredictable API costs in case you choose to deploy this application to production. When `BACKGROUND_REFRESH=true`, the Streamlit app serves only from cache and never calls external APIs—a separate scheduled job refreshes the cache at fixed intervals, decoupling API quota consumption from user traffic volume.
+This financial dashboard aggregates real-time stock data, news articles, and AI-generated insights for Netflix (NFLX), Alphabet (GOOGL), and Tesla (TSLA). Built to demonstrate resilient API integration patterns with smart caching and graceful degradation.
 
 **Disclaimer:** This application is for educational and demonstration purposes only. It does not provide financial, investment, legal, or professional advice. Stock data and AI-generated insights should not be used as the basis for any investment decisions. Always consult with qualified financial professionals before making investment decisions. The developers are not responsible for any financial losses or damages resulting from the use of this application.
 
-The application showcases:
+### Key Features
 
 - **Multi-API integration** with Polygon.io, NewsDataHub, and OpenAI
 - **Smart caching** with configurable TTL and stale data fallback
-- **Retry logic** with exponential backoff for network failures and rate limits
-- **Graceful degradation** when APIs are unavailable
-- **DRY refactoring** with generic cache handling
-- **Mobile-responsive UI** with dark theme
+- **Retry logic** with exponential backoff (429 rate limits: 15s/30s/45s, other errors: 0.5s/1s/2s)
+- **Graceful degradation** when APIs fail
+- **DRY refactoring** with generic `_fetch_with_cache()` method
+- **Independent component loading** for better UX
+- **Two deployment modes** (local interactive / background refresh for predictable API costs)
 
 ## Features
 
 ### Data Sources
-- **Stock Prices** - Real-time pricing and 1-month historical charts with dynamic y-axis scaling via [Polygon.io API](https://polygon.io)
+
+- **Stock Prices** - Real-time pricing and 1-month historical charts via [Polygon.io](https://polygon.io) (now [Massive.com](https://massive.com))
 - **Related Stocks** - Competitor stock prices with daily percentage changes
-- **News Articles** - Curated financial news from mainstream sources (5 articles displayed, with 3-step deduplication: relevance → headline → source) via [NewsDataHub API](https://newsdatahub.com)
-- **AI Insights** - GPT-powered analysis combining price trends and news via [OpenAI API](https://openai.com)
+- **News Articles** - Curated financial news from mainstream sources via [NewsDataHub](https://newsdatahub.com)
+- **AI Insights** - GPT-powered analysis combining price trends and news via [OpenAI](https://openai.com)
 
 ### Technical Highlights
-- **Independent component loading** - Each UI section (stock data, news, related stocks) renders independently with separate loading states
-- **Async API calls** - Non-blocking HTTP requests using httpx.AsyncClient and asyncio.gather() for parallel fetching
-- **Retry decorator with intelligent backoff** - Handles transient failures (429s with 15s/30s/45s delays, 5xx/timeouts with 0.5s/1s/2s delays)
-- **Smart caching** with fresh vs. stale data strategies (`get_fresh()` and `get_stale()` methods)
-- **Refactored data service** using generic `_fetch_with_cache()` method (DRY principle)
-- **JSON-based file caching** with automatic cleanup
-- **Comprehensive logging** with rotation
-- **Dynamic chart scaling** based on actual price range
-- **Brand color customization** - Tickers display in company brand colors
-- **Two deployment modes** (local interactive / VPS background refresh)
+
+- **Independent component loading** - Each section renders with separate loading states
+- **Async API calls** - Non-blocking HTTP requests using `httpx.AsyncClient`
+- **Retry decorator** - Handles 429 rate limits (15s/30s/45s delays), 5xx/timeouts (0.5s/1s/2s delays)
+- **Fresh vs. stale caching** - `get_fresh()` enforces TTL, `get_stale()` for fallback
+- **JSON-based caching** - Human-readable cache files with automatic cleanup
+- **Dynamic chart scaling** - Y-axis adjusts to actual price range
+- **Brand colors** - Company-specific colors for tickers
 
 ## Resilient Design Patterns
 
 ### 1. Retry Logic with Intelligent Backoff
 
-All API clients use the `@retry_with_backoff` decorator to handle transient failures and rate limits:
+API clients use `@retry_with_backoff` decorator to handle transient failures:
 
 ```python
 @retry_with_backoff(retry_on=(httpx.HTTPError,))
 async def get_stock_data(self, ticker: str) -> dict:
-    # API call with automatic retry on:
-    # - 429 (rate limit exceeded) → 15s, 30s, 45s delays
+    # Automatic retry on:
+    # - 429 (rate limit) → 15s, 30s, 45s delays
     # - 5xx (server errors) → 0.5s, 1s, 2s delays
     # - Network timeouts → 0.5s, 1s, 2s delays
-    # - Does NOT retry on 4xx client errors (except 429)
+    # - Does NOT retry 4xx client errors (except 429)
 ```
 
-**Implementation details:**
-- HTTP status codes trigger different retry behavior: 429 and 5xx retry, 4xx (except 429) do not
-- 429 errors use 15s/30s/45s delays (total 90s) to respect Polygon's 5 calls/minute quota
-- Other retryable errors (5xx, timeouts) use 0.5s/1s/2s exponential backoff (total 3.5s)
-- Implemented as Python decorator applied to async methods in API client classes
-- Retries on actual failures instead of preemptively rate limiting (simpler, more responsive)
+### 2. DRY Refactoring with Generic Cache Handler
 
-The `DataService` uses a single `_fetch_with_cache()` method instead of duplicating logic:
+`DataService` uses a single `_fetch_with_cache()` method:
 
 ```python
 async def _fetch_with_cache(self, cache_type, cache_key, fetch_fn, error_prefix):
@@ -71,7 +89,7 @@ async def _fetch_with_cache(self, cache_type, cache_key, fetch_fn, error_prefix)
     # 3. Fetch from API with retry
     # 4. Fall back to stale data on error
 
-# Simple usage:
+# Usage:
 async def get_stock_data(self, ticker: str) -> dict:
     return await self._fetch_with_cache(
         cache_type="polygon",
@@ -81,208 +99,177 @@ async def get_stock_data(self, ticker: str) -> dict:
     )
 ```
 
-**Result:**
-- Reduced code duplication by 90+ lines (get_stock_data and get_news previously duplicated caching logic)
-- Caching logic exists in one location (_fetch_with_cache method)
-- Changes to caching behavior require updates in one place
-- Retry logic remains in API client methods via @retry_with_backoff decorator
+**Result:** Eliminated 90+ lines of duplicate code across methods.
 
-### 2. Fresh vs. Stale Cache Strategy
+### 3. Fresh vs. Stale Cache Strategy
 
-The cache service implements two retrieval methods with different TTL enforcement:
+Two retrieval methods with different TTL enforcement:
 
-- **`get_fresh()`** - Returns cached data only if timestamp age < CACHE_TTL_MINUTES (10 minutes default), otherwise returns None
-- **`get_stale()`** - Returns cached data regardless of timestamp age, used when API calls fail
-
-When all API retries fail, DataService calls get_stale() to return expired cache instead of failing completely.
+- **`get_fresh()`** - Returns data only if age < `CACHE_TTL_MINUTES` (10 minutes default)
+- **`get_stale()`** - Returns data regardless of age (used when API calls fail)
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     Streamlit Application                        │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-│  │     UI      │  │   Services  │  │      API Clients        │  │
-│  │  Components │◄─┤  (Cache,    │◄─┤  (Polygon, NDH, OpenAI) │  │
-│  │             │  │   Data)     │  │  [@retry_with_backoff]  │  │
-│  └─────────────┘  └─────────────┘  └─────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                        Cache Layer                               │
-│         (JSON Files: get_fresh() vs. get_stale() data)           │
-└─────────────────────────────────────────────────────────────────┘
-                                │
-                                ▼
-┌───────────────────┬───────────────────┬─────────────────────────┐
-│   Polygon API     │  NewsDataHub API  │      OpenAI API         │
-│   (Stock Data)    │     (News)        │    (AI Insights)        │
-└───────────────────┴───────────────────┴─────────────────────────┘
+```mermaid
+graph TB
+    User[User Browser]
+
+    subgraph "Streamlit Application"
+        UI[UI Layer<br/>main.py, components.py]
+
+        subgraph "Services Layer"
+            DataService[Data Service<br/>data_service.py]
+            Cache[Cache Service<br/>cache.py]
+        end
+
+        Retry[Retry Decorator<br/>retry.py]
+
+        subgraph "API Clients"
+            PolygonClient[Polygon Client<br/>polygon.py]
+            NewsClient[NewsDataHub Client<br/>newsdatahub.py]
+            OpenAIClient[OpenAI Client<br/>openai_client.py]
+        end
+    end
+
+    subgraph "Cache Storage"
+        CacheFiles[(JSON Cache Files)]
+    end
+
+    subgraph "External APIs"
+        PolygonAPI[Polygon.io API<br/>Stock Data]
+        NewsAPI[NewsDataHub API<br/>News Articles]
+        OpenAI[OpenAI API<br/>AI Insights]
+    end
+
+    User --> UI
+    UI --> DataService
+    DataService --> Cache
+    DataService --> PolygonClient
+    DataService --> NewsClient
+    DataService --> OpenAIClient
+
+    Cache <--> CacheFiles
+
+    PolygonClient --> Retry
+    PolygonClient --> PolygonAPI
+    NewsClient --> Retry
+    NewsClient --> NewsAPI
+    OpenAIClient --> Retry
+    OpenAIClient --> OpenAI
+
+    style UI fill:#22c55e,stroke:#fff,color:#000
+    style DataService fill:#3b82f6,stroke:#fff,color:#fff
+    style Cache fill:#8b5cf6,stroke:#fff,color:#fff
+    style CacheFiles fill:#f59e0b,stroke:#fff,color:#000
 ```
 
 ## Prerequisites
 
 - **Python 3.9+**
-- **API Keys** (all free tiers available):
-  - [Polygon.io](https://polygon.io) - Stock market data
-  - [NewsDataHub](https://newsdatahub.com) - News articles
+- **API Keys** (Polygon and NewsDataHub have free tiers):
+  - [Polygon.io](https://polygon.io) (now [Massive.com](https://massive.com)) - Stock data
+  - [NewsDataHub](https://newsdatahub.com) - News
   - [OpenAI](https://platform.openai.com) - AI insights
 
 ## Installation
 
-### 1. Clone the Repository
+### 1. Clone and Setup
 
 ```bash
 git clone https://github.com/your-username/multi-api-financial-dashboard.git
 cd multi-api-financial-dashboard
-```
-
-### 2. Create Virtual Environment
-
-```bash
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-```
-
-### 3. Install Dependencies
-
-```bash
+source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 4. Configure Environment Variables
-
-Copy the example environment file and add your API keys:
+### 2. Configure Environment
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` and add your API keys:
+Edit `.env` with your API keys:
 
 ```env
-# API Keys (required)
 POLYGON_API_KEY=your_polygon_api_key_here
 NEWSDATAHUB_API_KEY=your_newsdatahub_api_key_here
 OPENAI_API_KEY=your_openai_api_key_here
 
-# Cache Configuration (optional)
+# Optional settings
 CACHE_TTL_MINUTES=10
 LOG_LEVEL=INFO
 ```
 
 ## Running the Application
 
-### Start the Dashboard
-
 ```bash
 streamlit run app/main.py
 ```
 
-The application will open in your browser at `http://localhost:8501`.
+Opens at `http://localhost:8501`
 
-### Using the Dashboard
+### Usage
 
-1. **Select a stock** from the dropdown (NFLX, GOOGL, or TSLA)
-2. **View real-time price** with percentage change
-3. **Explore the price chart** showing 1-month history with dynamic y-axis scaling
-4. **See related stocks** below the chart (e.g., DIS, PARA, WBD for NFLX)
-5. **Read latest news** from mainstream sources (5 articles in scrollable view)
-6. **Generate AI insights** by clicking the button (concise 100-word analysis)
+1. Select a stock (NFLX, GOOGL, or TSLA)
+2. View real-time price with percentage change
+3. Explore 1-month price chart
+4. See related competitor stocks
+5. Read latest news (5 articles)
+6. Generate AI insights (button click)
 
 ### Cache Behavior
 
-On first load, the app fetches fresh data from all APIs. Subsequent requests within the cache TTL (default: 10 minutes) are served from cache, avoiding unnecessary API calls.
-
-You'll see cache age indicators when viewing cached data:
+First load fetches fresh data. Subsequent requests within TTL (10 minutes) serve from cache. Cache age indicators show when viewing cached data:
 
 ```
 ⏱️ Price data from 5m ago
 ```
 
-## Background Refresh Mode (Optional)
+## Background Refresh Mode
 
-**Purpose:** Prevent unpredictable API quota usage when deploying to production.
+**Purpose:** Prevent unpredictable API costs in production.
 
 ### How It Works
 
-The application supports two modes controlled by the `BACKGROUND_REFRESH` environment variable:
-
 **Local Mode** (`BACKGROUND_REFRESH=false`, default):
-- User requests trigger the following logic in `DataService._fetch_with_cache()`:
-  1. Check if cached data exists and is fresh (age < `CACHE_TTL_MINUTES`)
-  2. If fresh: return cached data
-  3. If stale or missing: call external API, cache response, return data
-  4. If API call fails: return stale cached data as fallback
-- API quota consumption scales with user traffic volume
+- User requests may trigger API calls when cache is stale
+- API quota scales with user traffic
 
 **Background Refresh Mode** (`BACKGROUND_REFRESH=true`):
-- User requests trigger the following logic in `DataService._fetch_with_cache()`:
-  1. Check if cached data exists and is fresh (age < `CACHE_TTL_MINUTES`)
-  2. If fresh: return cached data
-  3. If stale or missing: return stale cached data (API is **never** called)
-- A separate process (`scripts/refresh_cache.py`) runs on a fixed schedule (e.g., cron job every 3 hours)
-- This background job calls external APIs and updates cache files
-- API quota consumption is constant regardless of user traffic volume
+- User requests never trigger API calls
+- Separate cron job (`scripts/refresh_cache.py`) refreshes cache on fixed schedule
+- API quota is constant regardless of traffic
 
 ### Configuration
 
-Set in your `.env` file:
+Set in `.env`:
 ```env
 BACKGROUND_REFRESH=true
 ```
 
-Run the background refresh job via cron (example for every 3 hours):
+Run refresh job via cron (every 3 hours):
 ```bash
 0 */3 * * * /path/to/venv/bin/python /path/to/scripts/refresh_cache.py
 ```
 
-### When to Use
-
-- **Local Mode:** Development, testing, personal use
-- **Background Mode:** Production deployments where you need predictable API costs
-
-**Tradeoff:** In background mode, data can be up to 3 hours stale (based on refresh interval), but users get instant responses and your API quota usage remains constant.
+**Tradeoff:** Data can be up to 3 hours stale, but API costs are predictable.
 
 ## Testing
 
-### Run All Tests
-
 ```bash
+# Run all tests
 pytest
-```
 
-### Run Tests with Coverage Report
-
-```bash
+# With coverage
 pytest --cov=app --cov-report=html --cov-report=term-missing
-```
 
-This generates an HTML coverage report in `htmlcov/index.html`.
-
-### Run Specific Test Files
-
-```bash
-# Test configuration
-pytest tests/test_config.py
-
-# Test caching
+# Specific tests
 pytest tests/test_cache.py
-
-# Test API clients
 pytest tests/test_polygon.py
-pytest tests/test_newsdatahub.py
 ```
 
-### Expected Coverage
-
-The test suite achieves approximately **25-30% coverage**, focusing on:
-
-- ✅ Configuration management with validation
-- ✅ Cache operations (set, get_fresh, get_stale, cleanup)
-- ✅ API response transformations
-- ✅ News deduplication logic
+**Coverage:** ~25-30% focusing on configuration, cache operations, API transformations, and news deduplication.
 
 ## Project Structure
 
@@ -291,136 +278,55 @@ multi-api-financial-dashboard/
 ├── app/
 │   ├── main.py                     # Streamlit entry point
 │   ├── config.py                   # Configuration with validation
-│   ├── api/
-│   │   ├── polygon.py              # Polygon API client [@retry_with_backoff]
-│   │   ├── newsdatahub.py          # NewsDataHub API client [@retry_with_backoff]
-│   │   └── openai_client.py        # OpenAI API client [@retry_with_backoff]
-│   ├── services/
-│   │   ├── cache.py                # Cache service (get_fresh/get_stale methods)
-│   │   └── data_service.py         # Orchestration with _fetch_with_cache
-│   ├── ui/
-│   │   └── components.py           # Reusable UI components
-│   └── utils/
-│       ├── logger.py               # Logging configuration
-│       └── retry.py                # @retry_with_backoff decorator (429-aware)
-├── scripts/
-│   └── refresh_cache.py            # Background refresh job
+│   ├── api/                        # API clients with @retry_with_backoff
+│   ├── services/                   # Cache and data orchestration
+│   ├── ui/components.py            # UI components
+│   └── utils/                      # Logging and retry decorator
+├── scripts/refresh_cache.py        # Background refresh job
 ├── tests/                          # Test suite
 ├── cache/                          # JSON cache files (git-ignored)
-├── logs/                           # Log files (git-ignored)
-├── .streamlit/
-│   └── config.toml                 # Streamlit theme configuration
-├── .env.example                    # Environment variables template
-├── requirements.txt                # Python dependencies
-└── README.md
+├── .env.example                    # Environment template
+└── requirements.txt                # Dependencies
 ```
 
-## Configuration Options
+## Configuration
 
-All configuration is managed through environment variables (see `.env.example`):
+Configure via environment variables (`.env`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `DEPLOYMENT_MODE` | `local` | Deployment identifier |
 | `BACKGROUND_REFRESH` | `false` | If true, app only reads cache |
 | `CACHE_TTL_MINUTES` | `10` | Cache freshness duration |
-| `CACHE_MAX_AGE_HOURS` | `24` | Delete cache files older than this |
-| `POLYGON_API_KEY` | — | Polygon.io API key (required) |
-| `NEWSDATAHUB_API_KEY` | — | NewsDataHub API key (required) |
-| `OPENAI_API_KEY` | — | OpenAI API key (required) |
-| `LOG_LEVEL` | `INFO` | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
-
-## Logging
-
-Logs are written to both console and `logs/app.log` with automatic rotation (max 1MB per file, 5 backups).
-
-### Log Format
-
-```
-2024-12-15 10:32:15 | INFO  | POLYGON | Call 1/5 | Ticker: AAPL | Response time: 234ms | Data points: 30
-2024-12-15 10:32:16 | DEBUG | CACHE | Hit | news_AAPL | Age: 4.2m
-2024-12-15 10:32:20 | INFO  | OPENAI | Call for AAPL | Tokens: 610 total | Response time: 1842ms
-```
-
-### Log Levels
-
-- **DEBUG** - Cache hits/misses, rate limiter details
-- **INFO** - API calls, response times, quota usage
-- **WARNING** - Rate limits reached, low quota, stale cache
-- **ERROR** - API failures, network errors
-
-## API Error Handling
-
-The application handles API failures gracefully:
-
-### Retry Strategy
-
-All API calls automatically retry on transient failures with intelligent backoff:
-
-| Error Type | Retry Delays | Total Wait | Rationale |
-|------------|-------------|------------|-----------|
-| **429 (Rate Limit)** | 15s, 30s, 45s | 90s | Respects Polygon's 5 calls/min quota (12s per call) |
-| **5xx (Server Errors)** | 0.5s, 1s, 2s | 3.5s | Fast recovery from transient server issues |
-| **Network Timeouts** | 0.5s, 1s, 2s | 3.5s | Quick retry for connectivity problems |
-| **4xx (Client Errors)** | No retry | 0s | Permanent errors (except 429) |
-
-### Cache Fallback
-
-If all retries fail, the app serves stale cached data:
-```
-⏱️ Price data from 2h ago  ← Stale data indicator
-```
-
-This ensures the dashboard remains functional even during API outages.
+| `CACHE_MAX_AGE_HOURS` | `24` | Delete cache older than this |
+| `POLYGON_API_KEY` | — | Required |
+| `NEWSDATAHUB_API_KEY` | — | Required |
+| `OPENAI_API_KEY` | — | Required |
+| `LOG_LEVEL` | `INFO` | Logging verbosity |
 
 ## Troubleshooting
 
 ### Application won't start
-
-- **Check API keys** - Ensure all three API keys are set in `.env`
-- **Check Python version** - Requires Python 3.9+
-- **Reinstall dependencies** - Run `pip install -r requirements.txt`
+- Verify all API keys in `.env`
+- Check Python version (3.9+)
+- Reinstall: `pip install -r requirements.txt`
 
 ### No data showing
-
-- **Check logs** - Look at `logs/app.log` for errors
-- **Verify API keys** - Test keys are valid and have quota remaining
-- **Check network** - Ensure you can reach external APIs
+- Check `logs/app.log` for errors
+- Verify API keys are valid with quota remaining
+- Test network connectivity
 
 ### Tests failing
-
-- **Install test dependencies** - Ensure pytest is installed
-- **Check permissions** - Tests create temp directories
-- **Run with verbose mode** - Use `pytest -v` for detailed output
+- Ensure pytest installed
+- Check file permissions
+- Run with verbose: `pytest -v`
 
 ## License
 
 MIT License - see LICENSE file for details.
 
-## Contributing
-
-Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
 ## Resources
 
-- **APIs**
-  - [Polygon.io Documentation](https://polygon.io/docs)
-  - [NewsDataHub API Documentation](https://newsdatahub.com/docs)
-  - [OpenAI API Documentation](https://platform.openai.com/docs)
-- **Technologies**
-  - [Streamlit Documentation](https://docs.streamlit.io)
-  - [Plotly Python Documentation](https://plotly.com/python/)
-  - [httpx Documentation](https://www.python-httpx.org/)
-
-## Support
-
-For issues or questions:
-- Open an issue on GitHub
-- Check the logs in `logs/app.log`
-- Review the API documentation links above
+- [Polygon.io Documentation](https://polygon.io/docs) (now Massive.com)
+- [NewsDataHub API Documentation](https://newsdatahub.com/docs)
+- [OpenAI API Documentation](https://platform.openai.com/docs)
+- [Streamlit Documentation](https://docs.streamlit.io)
