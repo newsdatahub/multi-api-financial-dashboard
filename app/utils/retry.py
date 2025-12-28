@@ -9,15 +9,14 @@ def retry_with_backoff(
     retry_on: Tuple[Type[Exception], ...] = (Exception,),
 ):
     """
-    Decorator for async functions with exponential backoff retry.
+    Decorator that intercepts API errors and retries with intelligent backoff.
 
-    Retries on:
-    - Network errors
-    - 429 (rate limit)
-    - 5xx (server errors)
+    Retry Strategy:
+    - Transient errors (timeouts, 500s): Quick backoff (0.5s → 1s → 2s)
+    - Rate limits (429): Longer delays (15s per attempt)
+    - Client errors (4xx except 429): No retry
 
-    Does NOT retry on:
-    - 4xx (except 429)
+    After all retries fail, calling code can fall back to stale cache.
     """
     if max_retries is None:
         max_retries = config.MAX_RETRIES
