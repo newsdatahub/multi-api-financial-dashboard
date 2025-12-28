@@ -42,7 +42,7 @@ class PolygonClient:
         async def fetch_ticker(ticker: str):
             try:
                 end_date = datetime.now()
-                start_date = end_date - timedelta(days=2)
+                start_date = end_date - timedelta(days=5)
 
                 url = f"{self.BASE_URL}/v2/aggs/ticker/{ticker}/range/1/day/{start_date:%Y-%m-%d}/{end_date:%Y-%m-%d}"
                 params = {"apiKey": self.api_key, "adjusted": "true", "sort": "desc"}
